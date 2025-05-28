@@ -2,10 +2,10 @@ mod auth;
 mod filesys;
 mod json_manip;
 mod keysetup;
+
 use std::fs;
 use std::path::Path;
 use std::env;
-
 
 use auth::login;
 
@@ -31,8 +31,12 @@ fn main() {
 
     }
     
-    let test = filesys::get_random_directories(5, "C:");
-    keysetup::generate_key(test, 7);
+    let test = filesys::get_random_directories(52, "C:");
+    let key = keysetup::generate_key(test, 10);
+
+    println!("{}", key);
+
+    
 
 
     // match filesys::detach_drive(locker) {

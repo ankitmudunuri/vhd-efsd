@@ -13,7 +13,6 @@ use std::thread;
 use std::time::Duration;
 
 pub fn main(){
-
     let test = get_random_directories(127, "C:");
     println!("{:?}", test);
 }
@@ -164,3 +163,4 @@ pub fn get_random_directories(n: usize, base_path: &str) -> Vec<String> {
 
     dirs
 }
+

@@ -30,6 +30,9 @@ pub fn generate_names(n: usize) -> Filename{
 }
 
 fn adjust_conflicts(filevec: &mut [Filename]) {
+    // Create a random number generator for the offset attempts.
+    let mut rng = rand::thread_rng();
+    
     loop {
         let front_letters: Vec<(usize, char)> = filevec
             .iter()
@@ -62,10 +65,37 @@ fn adjust_conflicts(filevec: &mut [Filename]) {
                     };
                     let mut new_char = current;
                     let mut found = false;
-                    for offset in 1..10 {
-                        for sign in [1, -1] {
-                            let candidate_val = (current as i32) + sign * (offset as i32);
+
+                    // Try up to 10 attempts with randomized offsets.
+                    for _attempt in 0..10 {
+                        // Randomize offset between 1 and 10.
+                        let offset: i32 = rng.gen_range(1..=20);
+                        for &sign in &[1, -1] {
+                            let mut candidate_val = (current as i32) + sign * offset;
+
+                            // Apply wrapping rules for incrementing.
+                            if sign == 1 {
+                                if candidate_val > 57 && candidate_val < 65 {
+                                    candidate_val = 65; // 'A'
+                                } else if candidate_val > 90 && candidate_val < 97 {
+                                    candidate_val = 97; // 'a'
+                                } else if candidate_val > 122 {
+                                    candidate_val = 48; // wrap to '0'
+                                }
+                            }
+                            // Apply wrapping rules for decrementing.
+                            else if sign == -1 {
+                                if candidate_val < 48 {
+                                    candidate_val = 122; // wrap to 'z'
+                                } else if candidate_val > 57 && candidate_val < 65 {
+                                    candidate_val = 57; // '9'
+                                } else if candidate_val > 90 && candidate_val < 97 {
+                                    candidate_val = 90; // 'Z'
+                                }
+                            }
+
                             if let Some(candidate) = std::char::from_u32(candidate_val as u32) {
+                                // Check candidate uniqueness among current front characters.
                                 let mut unique = true;
                                 for (j, file) in filevec.iter().enumerate() {
                                     if j == i {
@@ -106,7 +136,8 @@ fn adjust_conflicts(filevec: &mut [Filename]) {
     }
 }
 
-pub fn generate_key(direc_vec: Vec<String>, max_len: usize){
+
+pub fn generate_key(direc_vec: Vec<String>, max_len: usize) -> String{
     let mut filevec: Vec<Filename> = Vec::new();
     for _ in direc_vec.iter() {
         filevec.push(generate_names(max_len));
@@ -132,9 +163,5 @@ pub fn generate_key(direc_vec: Vec<String>, max_len: usize){
         }
     }
     
-    println!("{}", result_key);
-
-    for (i, filename) in filevec.iter().enumerate() {
-        println!("Filename {}: {}", i + 1, filename.original);
-    }
+    return result_key
 }
