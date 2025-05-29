@@ -24,7 +24,6 @@ pub fn generate_names(n: usize) -> Filename{
     let filename = filename.trim();
     let mut char_queue: VecDeque<char> = filename.chars().collect();
 
-    println!("Filename: {}", filename.to_string());
 
     return Filename {original: filename.to_string(), queue: char_queue, idx: 0};
 }

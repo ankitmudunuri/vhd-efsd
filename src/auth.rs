@@ -27,13 +27,20 @@ pub struct LoginAttempts {
     pub mac: String,
 }
 
-fn prompt_password(prompt: &str) -> String{
+pub fn prompt_password(prompt: &str) -> String{
     print!("{}", prompt);
     io::stdout().flush().unwrap();
     return read_password().unwrap();
 }
 
-fn write_to_file(pass_file: &str, pass_data: &PassData) -> (){
+fn write_to_file(pass_file: &str, pass_data: &PassData) -> () {
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = Path::new(pass_file).parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).expect("Could not create directory");
+        }
+    }
+    
     let json_data = serde_json::to_string_pretty(pass_data).unwrap();
     fs::write(pass_file, json_data).expect("Could not write to file");
 }
@@ -145,4 +152,12 @@ pub fn login(pass_file: &str, attempts_file: &str) -> bool {
             }
         }
     }
+}
+
+pub fn get_password_from_user() -> String {
+    print!("Enter password for encryption/decryption: ");
+    io::stdout().flush().unwrap();
+    let mut password = String::new();
+    io::stdin().read_line(&mut password).unwrap();
+    password.trim().to_string()
 }
