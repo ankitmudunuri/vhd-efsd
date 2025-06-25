@@ -34,7 +34,6 @@ pub fn prompt_password(prompt: &str) -> String{
 }
 
 fn write_to_file(pass_file: &str, pass_data: &PassData) -> () {
-    // Create parent directory if it doesn't exist
     if let Some(parent) = Path::new(pass_file).parent() {
         if !parent.exists() {
             fs::create_dir_all(parent).expect("Could not create directory");
@@ -74,7 +73,6 @@ fn increment_attempts(attempts_file: &str) -> bool {
     let mut attempts: LoginAttempts = read_attempts(attempts_file).unwrap_or(LoginAttempts { attempts: 5, mac: compute_mac(5, KEY), });
     if attempts.mac != compute_mac(attempts.attempts, KEY) {
         println!("Tampering detected in attempts file! Starting self-destruct sequence.");
-        // Do self-destruct sequence
         exit(1);
     }
 
@@ -146,7 +144,27 @@ pub fn login(pass_file: &str, attempts_file: &str) -> bool {
         } else {
             println!("Incorrect password entered!");
             if increment_attempts(attempts_file){
-                // Do self-destruct sequence
+                println!("Too many failed attempts! Self-destruct initiated.");
+                exit(1);
+            }
+        }
+    }
+}
+
+pub fn login_and_get_password(pass_file: &str, attempts_file: &str) -> Option<String> {
+    let pass_data = read_from_file(pass_file);
+    let parsed_hash = PasswordHash::new(&pass_data.password_hash).expect("Stored hash is invalid");
+    let argon2obj = Argon2::default();
+
+    loop {
+        let inp_password = prompt_password("Enter password: ");
+
+        if argon2obj.verify_password(inp_password.as_bytes(), &parsed_hash).is_ok() {
+            reset_attempts(attempts_file);
+            return Some(inp_password);
+        } else {
+            println!("Incorrect password entered!");
+            if increment_attempts(attempts_file){
                 println!("Too many failed attempts! Self-destruct initiated.");
                 exit(1);
             }
@@ -155,9 +173,5 @@ pub fn login(pass_file: &str, attempts_file: &str) -> bool {
 }
 
 pub fn get_password_from_user() -> String {
-    print!("Enter password for encryption/decryption: ");
-    io::stdout().flush().unwrap();
-    let mut password = String::new();
-    io::stdin().read_line(&mut password).unwrap();
-    password.trim().to_string()
+    prompt_password("Enter password for encryption/decryption: ")
 }

@@ -23,7 +23,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn create_drive(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Create parent directory if it doesn't exist
     if let Some(parent) = Path::new(path).parent() {
         if !parent.exists() {
             fs::create_dir_all(parent)?;
@@ -71,7 +70,6 @@ detach vdisk
         ).into());
     }
 
-    // Clean up the temporary script file
     let _ = fs::remove_file(script_path);
 
     Ok(())
@@ -95,7 +93,6 @@ detail vdisk"#,
             let _ = fs::remove_file(script_path);
             let output_str = String::from_utf8_lossy(&output.stdout);
             
-            // VHD is mounted if we have a disk number and state isn't Added or Detached
             let has_disk = !output_str.contains("Associated disk#: Not found");
             let state_added = output_str.contains("State : Added");
             let state_detached = output_str.contains("State : Detached");
@@ -110,7 +107,6 @@ pub fn attach_drive(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     if !Path::new(path).exists() {
         create_drive(path)?;
     }
-    // Always try to detach first, in case it's in 'Added' state
     let _ = vhdrs::Vhd::detach(path);
     std::thread::sleep(std::time::Duration::from_millis(500));
     let mut vhd = vhdrs::Vhd::new(path, vhdrs::OpenMode::ReadWrite, None)?;
@@ -120,6 +116,110 @@ pub fn attach_drive(path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn detach_drive(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     vhdrs::Vhd::detach(path)?;
+    Ok(())
+}
+
+pub fn split_binary_with_key(vhd_path: &str, fragments: &[crate::keysetup::FragmentInfo], total_chunks: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let vhd_file = File::open(vhd_path)?;
+    let metadata = vhd_file.metadata()?;
+    let total_size = metadata.len() as usize;
+    
+    let chunk_size = if total_chunks > 0 {
+        (total_size + total_chunks - 1) / total_chunks
+    } else {
+        return Err("Total chunks must be greater than 0".into());
+    };
+    
+    let mut reader = BufReader::new(vhd_file);
+    let mut chunks = Vec::new();
+    
+    for i in 0..total_chunks {
+        let bytes_to_read = if i < total_chunks - 1 {
+            chunk_size
+        } else {
+            total_size - chunk_size * (total_chunks - 1)
+        };
+        
+        let mut chunk_buffer = vec![0u8; bytes_to_read];
+        reader.read_exact(&mut chunk_buffer)?;
+        chunks.push(chunk_buffer);
+    }
+    
+    for fragment in fragments {
+        let file_path = Path::new(&fragment.directory).join(&fragment.filename);
+        let mut output_file = BufWriter::new(File::create(&file_path)?);
+        
+        for &chunk_index in &fragment.chunk_indices {
+            if chunk_index < chunks.len() {
+                output_file.write_all(&chunks[chunk_index])?;
+            }
+        }
+        
+        output_file.flush()?;
+    }
+    
+    if let Err(e) = fs::remove_file(vhd_path) {
+        eprintln!("Warning: failed to delete VHD file after splitting: {}", e);
+    }
+    
+    Ok(())
+}
+
+pub fn assemble_binary_with_key(fragments: &[crate::keysetup::FragmentInfo], key: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let total_chunks = key.len();
+    let mut chunks = vec![Vec::new(); total_chunks];
+    
+    let mut total_size = 0;
+    for fragment in fragments {
+        let file_path = Path::new(&fragment.directory).join(&fragment.filename);
+        if let Ok(metadata) = fs::metadata(&file_path) {
+            total_size += metadata.len() as usize;
+        }
+    }
+    
+    let chunk_size = if total_chunks > 0 {
+        (total_size + total_chunks - 1) / total_chunks 
+    } else {
+        return Err("No chunks to assemble".into());
+    };
+    
+    for fragment in fragments {
+        let file_path = Path::new(&fragment.directory).join(&fragment.filename);
+        let fragment_file = File::open(&file_path)?;
+        let mut reader = BufReader::new(fragment_file);
+        
+        if fragment.chunk_indices.is_empty() {
+            continue;
+        }
+        
+        let mut fragment_data = Vec::new();
+        reader.read_to_end(&mut fragment_data)?;
+        
+        let mut offset = 0;
+        for &global_chunk_index in &fragment.chunk_indices {
+            let bytes_for_this_chunk = if global_chunk_index < total_chunks - 1 {
+                chunk_size
+            } else {
+                total_size - chunk_size * (total_chunks - 1)
+            };
+            
+            if offset + bytes_for_this_chunk <= fragment_data.len() && global_chunk_index < chunks.len() {
+                chunks[global_chunk_index] = fragment_data[offset..offset + bytes_for_this_chunk].to_vec();
+                offset += bytes_for_this_chunk;
+            }
+        }
+    }
+    
+    let output_file = File::create(output_path)?;
+    let mut writer = BufWriter::new(output_file);
+    
+    for chunk in chunks {
+        if !chunk.is_empty() {
+            writer.write_all(&chunk)?;
+        }
+    }
+    
+    writer.flush()?;
     Ok(())
 }
 
@@ -152,7 +252,6 @@ pub fn split_binary(filepaths: Vec<(&str, &str)>, vhdname: &str) -> (){
         chunkfile.write_all(&chunk_buff).expect("Couldn't write to buffer");
     }
 
-    // Delete the original VHD file after splitting
     if let Err(e) = fs::remove_file(vhdpath) {
         eprintln!("Warning: failed to delete VHD file after splitting: {}", e);
     }
@@ -188,11 +287,17 @@ fn normalize_path(path: &str) -> String {
 pub fn get_random_directories(n: usize, base_path: &str) -> Vec<String> {
     let mut rng = rand::thread_rng();
     let mut result = Vec::with_capacity(n);
-    let accept_prob = 0.05;
+    let accept_prob = 0.1;
     let temp_dir = std::env::temp_dir().to_string_lossy().to_lowercase();
+    
+    let preferred_patterns = [
+        "documents", "pictures", "videos", "music", "projects", "work", "data", 
+        "files", "archive", "storage", "shared", "public", "media", "games"
+    ];
+    
     for entry in WalkDir::new(base_path)
-        .min_depth(1)
-        .max_depth(8)
+        .min_depth(2)
+        .max_depth(6)
         .into_iter()
         .filter_map(Result::ok)
     {
@@ -201,6 +306,7 @@ pub fn get_random_directories(n: usize, base_path: &str) -> Vec<String> {
             if let Some(s) = path.to_str() {
                 let norm = normalize_path(s);
                 let norm_lower = norm.to_lowercase();
+                
                 if norm_lower.contains(&temp_dir)
                     || norm_lower.contains("windows")
                     || norm_lower.contains("program files")
@@ -211,10 +317,44 @@ pub fn get_random_directories(n: usize, base_path: &str) -> Vec<String> {
                     || norm_lower.contains("users\\default")
                     || norm_lower.contains("users\\public")
                     || norm_lower.contains("$")
+                    || norm_lower.contains("temp")
+                    || norm_lower.contains("tmp")
+                    || norm_lower.contains("cache")
+                    || norm_lower.contains("logs")
+                    || norm_lower.contains("log")
+                    || norm_lower.contains("backup")
+                    || norm_lower.contains("downloads")
+                    || norm_lower.contains("desktop")
+                    || norm_lower.contains("recent")
+                    || norm_lower.contains("history")
+                    || norm_lower.contains("cookies")
+                    || norm_lower.contains("temporary")
+                    || norm_lower.contains("msocache")
+                    || norm_lower.contains("prefetch")
+                    || norm_lower.contains("intel")
+                    || norm_lower.contains("microsoft")
+                    || norm_lower.contains("mozilla")
+                    || norm_lower.contains("google")
+                    || norm_lower.contains("chrome")
+                    || norm_lower.contains("firefox")
+                    || norm_lower.contains("edge")
+                    || norm_lower.contains("system32")
+                    || norm_lower.contains("syswow64")
+                    || norm_lower.contains("winsxs")
+                    || norm_lower.contains("recovery")
+                    || norm_lower.contains("perflogs")
+                    || norm_lower.starts_with("c:\\users")
+                    || norm_lower.starts_with("c:\\windows")
+                    || norm_lower.starts_with("c:\\program")
+                    || norm.len() < 10 
                 {
                     continue;
                 }
-                if rng.gen_bool(accept_prob) {
+                
+                let is_preferred = preferred_patterns.iter().any(|&pattern| norm_lower.contains(pattern));
+                let probability = if is_preferred { accept_prob * 3.0 } else { accept_prob };
+                
+                if rng.gen_bool(probability) {
                     result.push(norm);
                     if result.len() == n {
                         break;
